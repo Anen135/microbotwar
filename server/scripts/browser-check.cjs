@@ -25,6 +25,14 @@ async function main() {
     const guest = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
     const errors = []
     for (const page of [host, guest]) {
+      // Pixel polling can switch a canvas from GPU to CPU midway through a test.
+      // Use the same backend in both contexts for exact image comparison.
+      await page.addInitScript(() => {
+        const getContext = HTMLCanvasElement.prototype.getContext
+        HTMLCanvasElement.prototype.getContext = function (kind, options) {
+          return getContext.call(this, kind, kind === '2d' ? { ...options, willReadFrequently: true } : options)
+        }
+      })
       page.on('pageerror', error => errors.push(error.message))
       page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
       await page.goto(url)
@@ -51,15 +59,55 @@ async function main() {
     await source.fill('attak(null)')
     await host.getByRole('button', { name: 'Применить', exact: true }).click()
     await host.getByRole('alert').filter({ hasText: 'Unknown function' }).waitFor()
+    await host.getByRole('button', { name: 'Перейти к строке', exact: true }).click()
+    assert.equal(await source.evaluate(input => input.value.slice(input.selectionStart, input.selectionEnd)), 'attak(null)')
     await source.fill('moveTo(800, 450)')
     await host.getByRole('button', { name: 'Применить', exact: true }).click()
     await host.getByText('Программа применена ко всем вашим ботам, включая новых.', { exact: true }).waitFor()
     const player = game.players.find(player => player.name === 'Alpha')
     assert.equal(player.source, 'moveTo(800, 450)')
     assert.equal(player.control, 'script')
-    await source.fill('x = 1 / 0')
+    await source.fill('x = 1\ny = missing')
     await host.getByRole('button', { name: 'Применить', exact: true }).click()
-    await host.getByRole('alert').filter({ hasText: 'Expected a finite number' }).waitFor()
+    await host.getByRole('alert').filter({ hasText: 'Unknown variable "missing"' }).waitFor()
+    await host.getByText('Строка 2', { exact: true }).waitFor()
+    await host.getByRole('button', { name: 'Перейти к строке', exact: true }).click()
+    assert.equal(await source.evaluate(input => input.value.slice(input.selectionStart, input.selectionEnd)), 'y = missing')
+    await source.fill('# changed draft\nx = 1\ny = missing')
+    await host.getByText('Ошибка в применённой версии программы. Текст в редакторе уже изменён.', { exact: true }).waitFor()
+    assert.equal(await host.getByRole('button', { name: 'Перейти к строке', exact: true }).count(), 0)
+    const longVariable = `missing_${'x'.repeat(500)}`
+    await source.fill(`x = ${longVariable}`)
+    await host.getByRole('button', { name: 'Применить', exact: true }).click()
+    await host.getByRole('alert').filter({ hasText: longVariable }).waitFor()
+    await host.getByText('Как программировать ботов', { exact: true }).click()
+    assert.ok((await host.locator('#code-help').innerText()).includes(`Новый бот: ${game.config.botCost} ресурсов`))
+    for (const width of [1024, 1280, 1440]) {
+      await host.setViewportSize({ width, height: 1000 })
+      const layout = await host.evaluate(() => {
+        const editor = document.querySelector('.editor').getBoundingClientRect()
+        const arena = document.querySelector('.arena').getBoundingClientRect()
+        const canvas = document.querySelector('canvas')
+        const rect = canvas.getBoundingClientRect()
+        return {
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          separated: editor.right <= arena.left,
+          ratio: Math.abs(rect.width / rect.height - canvas.width / canvas.height),
+          buttonsFit: [...document.querySelectorAll('.editor button')].every(button => {
+            const box = button.getBoundingClientRect()
+            return box.left >= editor.left && box.right <= editor.right
+          }),
+        }
+      })
+      assert.equal(layout.overflow, false, `horizontal overflow at ${width}`)
+      assert.equal(layout.separated && layout.buttonsFit, true, `layout at ${width}`)
+      assert.ok(layout.ratio < 0.01)
+      await host.screenshot({ path: path.join(artifacts, `layout-${width}.png`), fullPage: true })
+    }
+    await source.fill('x = 1\ny = missing')
+    await host.getByRole('button', { name: 'Применить', exact: true }).click()
+    await host.getByRole('alert').filter({ hasText: 'Unknown variable "missing"' }).waitFor()
+    await host.getByText('Как программировать ботов', { exact: true }).click()
     assert.equal(game.state, 'running')
     await host.getByRole('button', { name: 'Включить AI', exact: true }).click()
     await host.getByText('Ботами управляет встроенный AI.', { exact: true }).waitFor()
@@ -67,7 +115,32 @@ async function main() {
     for (const page of [host, guest]) {
       await page.waitForFunction(tick => document.querySelector('[data-testid="tick"]').textContent.startsWith(`Тик ${tick} ·`), game.tickCount)
     }
-    assert.equal(await host.locator('canvas').evaluate(canvas => canvas.toDataURL()), await guest.locator('canvas').evaluate(canvas => canvas.toDataURL()))
+    // A real attack must produce a temporary contour, including with ticks stopped.
+    const base = game.bases.find(base => base.ownerId === player.id)
+    const attacker = game.bots.find(bot => bot.ownerId !== player.id)
+    attacker.x = base.x - 30
+    attacker.y = base.y
+    const point = { x: Math.round(base.x + 27), y: Math.round(base.y) }
+    const isWhite = ({ x, y }) => {
+      const pixel = document.querySelector('canvas').getContext('2d').getImageData(x, y, 1, 1).data
+      return pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240
+    }
+    const flash = host.waitForFunction(isWhite, point, { polling: 'raf', timeout: 3000 })
+    assert.equal(game.attack(attacker, base), true)
+    await flash
+    for (const page of [host, guest]) {
+      await page.waitForFunction(({ x, y }) => {
+        const pixel = document.querySelector('canvas').getContext('2d').getImageData(x, y, 1, 1).data
+        return !(pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240)
+      }, point)
+    }
+    const hostCanvas = await host.locator('canvas').evaluate(canvas => canvas.toDataURL())
+    const guestCanvas = await guest.locator('canvas').evaluate(canvas => canvas.toDataURL())
+    if (hostCanvas !== guestCanvas) {
+      await host.locator('canvas').screenshot({ path: path.join(artifacts, 'host-canvas.png') })
+      await guest.locator('canvas').screenshot({ path: path.join(artifacts, 'guest-canvas.png') })
+    }
+    assert.ok(hostCanvas === guestCanvas, 'Canvas differs between clients after hit feedback expires')
     await host.screenshot({ path: path.join(artifacts, 'match.png'), fullPage: true })
     // Advance the real simulation faster than wall time; victory still comes from combat.
     for (let i = 0; i < 30000 && game.state === 'running'; i += 1) game.tick()
@@ -80,12 +153,12 @@ async function main() {
     await host.getByRole('heading', { name: /^Победитель:/ }).waitFor({ state: 'hidden' })
     assert.equal(game.state, 'running')
     assert.notEqual(game.bots[0].id, oldBot)
-    assert.equal(player.source, 'x = 1 / 0')
+    assert.equal(player.source, 'x = 1\ny = missing')
     assert.equal(game.bots[0].program, player.program)
     await guest.getByRole('button', { name: 'Выйти', exact: true }).click()
     await host.getByRole('heading', { name: 'Победитель: Alpha', exact: true }).waitFor()
     assert.deepEqual(errors, [])
-    console.log('Browser check passed: two isolated clients, lobby, synchronized canvas, Apply/errors, AI victory, restart and leave. No browser errors.')
+    console.log('Browser check passed: two clients, lobby, synchronized canvas, Apply/error navigation, draft handling, layouts 1024/1280/1440, hit flash, AI victory, restart and leave. No browser errors.')
     console.log(`Screenshots: ${artifacts}`)
   } finally {
     await browser?.close()

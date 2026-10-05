@@ -6,7 +6,9 @@ main { max-width: 1680px; margin: 0 auto; padding: 28px 32px; }
 .connection.online { color: #92dbb5; }
 .panel { background: #121d2b; border: 1px solid #2a394b; border-radius: 12px; }
 .notice { padding: 12px 16px; margin: 12px 0; background: #192b3c; border-left: 3px solid #72b7ff; border-radius: 4px; font-size: 14px; }
-.notice.error { background: #35232c; border-color: #ff90a0; color: #ffd4dc; white-space: pre-wrap; }
+.notice.error { background: #35232c; border-color: #ff90a0; color: #ffd4dc; white-space: pre-wrap; overflow-wrap: anywhere; }
+.error-line { display: block; margin-bottom: 6px; }
+.notice.error button { margin-top: 12px; }
 .welcome { display: grid; grid-template-columns: 1.3fr 1fr; gap: 70px; padding: 60px; margin-top: 45px; }
 .welcome h2 { font-size: 36px; margin: 20px 0; max-width: 500px; }
 .welcome p { margin-bottom: 20px; }
@@ -22,15 +24,17 @@ main { max-width: 1680px; margin: 0 auto; padding: 28px 32px; }
 .lobby small { color: #93a9be; }
 .ready { margin-left: auto; font-size: 13px; }
 .scoreboard { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
-.score { display: grid; gap: 6px; padding: 14px 20px; min-width: 190px; flex: 1; }
+.score { display: grid; gap: 6px; padding: 14px 20px; min-width: 190px; flex: 1; overflow-wrap: anywhere; }
 .score span { color: #9cadbe; font-size: 13px; }
 .game-layout { display: grid; grid-template-columns: minmax(320px, 370px) minmax(0, 1fr); gap: 18px; align-items: start; }
-.editor { padding: 18px; display: grid; gap: 14px; }
+.editor { padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.editor > * { min-width: 0; }
+.editor .arena-header { flex-wrap: wrap; }
 .arena-header h2 { font-size: 17px; }
 .arena-header span { font-size: 12px; color: #9cadbe; }
 .editor textarea { resize: vertical; width: 100%; min-height: 410px; font: 13px/1.6 Consolas, monospace; white-space: pre; tab-size: 4; }
 .editor .actions button { padding: 9px 12px; font-size: 13px; }
-.editor details { font-size: 13px; color: #aebfd1; }
+.editor details { font-size: 13px; color: #aebfd1; overflow-wrap: anywhere; }
 .editor details p { margin-top: 12px; }
 .arena { overflow: hidden; }
 .arena > .arena-header { padding: 18px; }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { socket } from './socket'
 import Renderer from './components/renderer'
 import Editor from './components/editor'
+import { countLabel } from './format'
 import './App.css'
 
 function App() {
@@ -14,17 +15,19 @@ function App() {
   const [example, setExample] = useState('')
   const [applied, setApplied] = useState('')
   const [error, setError] = useState('')
+  const [compileError, setCompileError] = useState(null)
   const [message, setMessage] = useState('')
   const [debug, setDebug] = useState({ cpu: 0, error: null })
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    const onConnect = () => setConnected(true)
+    const onConnect = () => { setConnected(true); setError('') }
     const onDisconnect = () => {
       setConnected(false)
       setRoom(null)
       setState(null)
       setDebug({ cpu: 0, error: null })
+      setCompileError(null)
       setMessage('Соединение потеряно. После восстановления войдите в новую комнату. Выход из матча считается поражением.')
     }
     const onError = () => setError('Не удалось подключиться к серверу. Проверьте, что он запущен.')
@@ -49,6 +52,7 @@ function App() {
   async function request(event, data = {}) {
     setBusy(true)
     setError('')
+    if (event === 'applyProgram') setCompileError(null)
     try {
       const response = await new Promise((resolve, reject) => {
         socket.timeout(5000).emit(event, data, (timeout, result) => {
@@ -59,7 +63,8 @@ function App() {
       })
       return response
     } catch (failure) {
-      setError(failure.message)
+      if (event === 'applyProgram') setCompileError({ source: data.source, message: failure.message })
+      else setError(failure.message)
       return null
     } finally {
       setBusy(false)
@@ -73,6 +78,7 @@ function App() {
       setSource(response.source)
       setExample(response.source)
       setApplied('')
+      setCompileError(null)
       setMessage('Перед началом матча каждый игрок должен подтвердить готовность.')
     }
   }
@@ -85,8 +91,10 @@ function App() {
     }
   }
   async function apply() {
-    if (await request('applyProgram', { source })) {
-      setApplied(source)
+    const submitted = source
+    if (await request('applyProgram', { source: submitted })) {
+      setApplied(submitted)
+      setDebug({ cpu: 0, error: null })
       setMessage('Программа применена ко всем вашим ботам, включая новых.')
     }
   }
@@ -133,9 +141,9 @@ function App() {
           ) : state && (
             <>
               {state.gameState === 'finished' && <section className="result panel" role="status"><h2>{winner ? `Победитель: ${winner.name}` : 'Матч завершён: ничья'}</h2><p>Симуляция остановлена. Хост может перезапустить матч с сохранением программ.</p></section>}
-              <section className="scoreboard">{state.players.map(item => <div className="panel score" key={item.id}><strong style={{ color: item.color }}>{item.name}{item.id === player?.id ? ' · вы' : ''}</strong><span>{item.alive ? `${item.resources} ресурсов · ${state.bots.filter(bot => bot.ownerId === item.id).length} ботов` : 'Поражение'}</span></div>)}</section>
+              <section className="scoreboard">{state.players.map(item => <div className="panel score" key={item.id}><strong style={{ color: item.color }}>{item.name}{item.id === player?.id ? ' · вы' : ''}</strong><span>{item.alive ? `${countLabel(item.resources, 'ресурс', 'ресурса', 'ресурсов')} · ${countLabel(state.bots.filter(bot => bot.ownerId === item.id).length, 'бот', 'бота', 'ботов')}` : 'Поражение'}</span></div>)}</section>
               <div className="game-layout">
-                <Editor source={source} onChange={setSource} onApply={apply} onExample={() => setSource(example)} onAI={async () => { if (await request('useAI')) setMessage('Ботами управляет встроенный AI.') }} disabled={disabled} applied={source === applied && player?.control === 'script'} control={player?.control} debug={debug} limit={state.config.scriptOperationLimit} />
+                <Editor source={source} onChange={setSource} onApply={apply} onExample={() => setSource(example)} onAI={async () => { if (await request('useAI')) setMessage('Ботами управляет встроенный AI.') }} disabled={disabled} applied={source === applied && player?.control === 'script'} appliedSource={applied} compileError={compileError} control={player?.control} debug={debug} config={state.config} />
                 <section className="panel arena"><div className="arena-header"><h2>Арена</h2><span data-testid="tick">Тик {state.tick} · {state.config.tickRate} тиков/с</span></div><Renderer state={state} /><p className="muted legend">● База и боты — цвет игрока · ◆ Ресурсы · Полоска — здоровье</p></section>
               </div>
             </>
