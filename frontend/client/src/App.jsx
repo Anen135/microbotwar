@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { socket } from './socket'
 import Renderer from './components/renderer'
 import Editor from './components/editor'
+import ProgramControls from './components/ProgramControls'
+import { emptyDesign, botExample, controllerExample } from './programDefaults'
+import BotInspector from './components/BotInspector'
 import Icon from './components/Icon'
 import ArenaPreview from './components/ArenaPreview'
 import PageLink from './components/PageLink'
@@ -39,14 +42,25 @@ function App() {
   const [state, setState] = useState(null)
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
-  const [source, setSource] = useState('')
+  const [programs, setPrograms] = useState({ default: { source: '', design: { ...emptyDesign }, applied: null } })
+  const [baseProgram, setBaseProgram] = useState({ source: '', applied: null })
+  const [selectedProgram, setSelectedProgram] = useState('default')
   const [example, setExample] = useState('')
-  const [applied, setApplied] = useState('')
+  const [baseExample, setBaseExample] = useState('')
   const [error, setError] = useState('')
   const [compileError, setCompileError] = useState(null)
   const [message, setMessage] = useState('')
   const [debug, setDebug] = useState({ cpu: 0, error: null })
   const [busy, setBusy] = useState(false)
+  const isBase = selectedProgram === '@base'
+  const draft = isBase ? baseProgram : programs[selectedProgram]
+  const source = draft.source
+  const applied = draft.applied
+  function updateDraft(changes) {
+    if (isBase) setBaseProgram(current => ({ ...current, ...changes }))
+    else setPrograms(current => ({ ...current, [selectedProgram]: { ...current[selectedProgram], ...changes } }))
+  }
+  function setSource(source) { updateDraft({ source }) }
 
   useEffect(() => {
     const onConnect = () => { setConnected(true); setError('') }
@@ -80,7 +94,7 @@ function App() {
   async function request(event, data = {}) {
     setBusy(true)
     setError('')
-    if (event === 'applyProgram') setCompileError(null)
+    if (event === 'applyProgram' || event === 'applyBaseProgram') setCompileError(null)
     try {
       const response = await new Promise((resolve, reject) => {
         socket.timeout(5000).emit(event, data, (timeout, result) => {
@@ -92,7 +106,7 @@ function App() {
       if (event === 'startMatch' || event === 'restartMatch') setMessage('')
       return response
     } catch (failure) {
-      if (event === 'applyProgram') setCompileError({ source: data.source, message: failure.message })
+      if (event === 'applyProgram' || event === 'applyBaseProgram') setCompileError({ programId: event === 'applyBaseProgram' ? '@base' : data.programId, source: data.source, message: failure.message })
       else setError(failure.message)
       return null
     } finally {
@@ -104,9 +118,11 @@ function App() {
     const response = await request(event, { name, code })
     if (response) {
       setRoom(response.room)
-      setSource(response.source)
-      setExample(response.source)
-      setApplied('')
+      setPrograms({ default: { source: '', design: { ...emptyDesign }, applied: null } })
+      setBaseProgram({ source: '', applied: null })
+      setSelectedProgram('default')
+      setExample(response.example || botExample)
+      setBaseExample(response.baseExample || controllerExample)
       setCompileError(null)
       setMessage('')
     }
@@ -121,10 +137,11 @@ function App() {
   }
   async function apply() {
     const submitted = source
-    if (await request('applyProgram', { source: submitted })) {
-      setApplied(submitted)
+    const design = isBase ? null : { ...draft.design }
+    if (await request(isBase ? 'applyBaseProgram' : 'applyProgram', isBase ? { source: submitted } : { programId: selectedProgram, source: submitted, design })) {
+      updateDraft({ applied: submitted, ...(isBase ? {} : { appliedDesign: design }) })
       setDebug({ cpu: 0, error: null })
-      setMessage('Программа применена ко всем вашим ботам, включая новых.')
+      setMessage(isBase ? 'Программа базы применена.' : `Программа ${selectedProgram} сохранена. Новые боты создаются командой spawn("${selectedProgram}").`)
     }
   }
   const me = room?.members.find(member => member.id === socket.id)
@@ -135,6 +152,8 @@ function App() {
   const playing = Boolean(room && room.status !== 'lobby' && state)
   const elapsed = state ? Math.floor(state.tick / state.config.tickRate) : 0
   const matchTime = `${Math.floor(elapsed / 60).toString().padStart(2, '0')}:${(elapsed % 60).toString().padStart(2, '0')}`
+  const config = state?.config || serverConfig
+  const editor = <Editor navigate={navigate} source={source} onChange={setSource} onApply={apply} onExample={() => setSource(isBase ? baseExample : example)} disabled={disabled} applied={source === applied && (isBase || JSON.stringify(draft.design) === JSON.stringify(draft.appliedDesign))} appliedSource={applied} compileError={compileError?.programId === selectedProgram ? compileError : null} debug={debug.programId === selectedProgram || (!debug.programId && selectedProgram === 'default') ? debug : { cpu: 0, error: null }} config={config} programId={selectedProgram} isBase={isBase} controls={<ProgramControls programs={programs} selected={selectedProgram} onSelect={setSelectedProgram} onCreate={id => { setPrograms(current => ({ ...current, [id]: { source: '', design: { ...emptyDesign }, applied: null } })); setSelectedProgram(id) }} design={draft.design || emptyDesign} onDesign={design => updateDraft({ design })} budget={config?.designPoints ?? 10} disabled={disabled} />} />
 
   async function copyRoom() {
     try {
@@ -182,7 +201,7 @@ function App() {
               <div className="actions room-actions">
                 {room.status === 'lobby' && <button className={me?.ready ? 'secondary ready-button' : ''} disabled={disabled} onClick={() => request('setReady', { ready: !me?.ready })}><Icon name="check" size={16} />{me?.ready ? 'Не готов' : 'Готов'}</button>}
                 {host && room.status === 'lobby' && <Tip text="Для старта нужны минимум два игрока. Все участники должны подтвердить готовность."><button disabled={disabled || room.members.length < 2 || !room.members.every(member => member.ready)} onClick={() => request('startMatch')}><Icon name="play" size={16} />Начать матч</button></Tip>}
-                {host && room.status !== 'lobby' && <Tip text="Начать матч заново. Программы и режим управления сохранятся."><button className="secondary" disabled={disabled || room.members.length < 2} onClick={() => request('restartMatch')}><Icon name="refresh" size={15} />Перезапустить матч</button></Tip>}
+                {host && room.status !== 'lobby' && <Tip text="Начать матч заново. Программы и конструкции сохранятся."><button className="secondary" disabled={disabled || room.members.length < 2} onClick={() => request('restartMatch')}><Icon name="refresh" size={15} />Перезапустить матч</button></Tip>}
                 <Tip text="Покинуть комнату. Выход из текущего матча считается поражением."><button className="quiet" disabled={disabled} onClick={leave}><Icon name="exit" size={16} />Выйти</button></Tip>
               </div>
             </section>
@@ -192,18 +211,20 @@ function App() {
                   <ul>{room.members.map((member, index) => <li key={member.id}><span className="player-avatar" style={{ '--player-color': member.color }}>{member.name.slice(0, 1).toUpperCase()}</span><div className="member-name"><strong>{member.name}{member.id === socket.id && <small>ВЫ</small>}</strong><span>Игрок {String(index + 1).padStart(2, '0')}{member.id === room.hostId ? ' · Хост комнаты' : ' · Противник'}</span></div><span className={`ready ${member.ready ? 'is-ready' : ''}`}><Icon name={member.ready ? 'check' : 'clock'} size={14} />{member.ready ? 'Готов' : 'Ожидает'}</span></li>)}</ul>
                   {room.members.length < 2 && <div className="empty-slot"><span className="empty-avatar"><Icon name="users" /></span><div><strong>Ожидание соперника</strong></div></div>}
                 </section>
+                {editor}
               </div>
             ) : state && (
               <>
                 {state.gameState === 'finished' && <section className="result panel" role="status"><span className="result-icon"><Icon name="trophy" size={30} /></span><div><p className="eyebrow">МАТЧ ЗАВЕРШЁН</p><h2>{winner ? `Победитель: ${winner.name}` : 'Матч завершён: ничья'}</h2></div><span className="result-decoration" aria-hidden="true">GG.</span></section>}
                 <section className="scoreboard" aria-label="Армии игроков">{state.players.map(item => {
+                  const own = item.id === state.viewerId || item.id === player?.id
                   const bots = state.bots.filter(bot => bot.ownerId === item.id).length
                   const base = state.bases.find(base => base.ownerId === item.id)
-                  return <div className={`panel score ${!item.alive ? 'defeated' : ''}`} key={item.id} style={{ '--player-color': item.color }}><div className="player-line"><span className="player-avatar">{item.name.slice(0, 1).toUpperCase()}</span><strong>{item.name}</strong><span className="player-tag">{item.id === player?.id ? 'ВЫ' : 'СОПЕРНИК'}</span>{!item.alive && <span className="eliminated-label">Поражение</span>}</div><div className="score-metrics"><span><Icon name="gem" size={17} /><b>{item.resources}</b><small>{countLabel(item.resources, 'ресурс', 'ресурса', 'ресурсов').split(' ').slice(1).join(' ')}</small></span><span><Icon name="bot" size={17} /><b>{bots}</b><small>{countLabel(bots, 'бот', 'бота', 'ботов').split(' ').slice(1).join(' ')}</small></span><div className="base-status"><span>БАЗА</span><span>{base ? `${Math.round(base.hp / base.maxHp * 100)}%` : '0%'}</span><div className="base-health"><i style={{ width: `${base ? base.hp / base.maxHp * 100 : 0}%` }} /></div></div></div></div>
+                  return <div className={`panel score ${!item.alive ? 'defeated' : ''}`} key={item.id} style={{ '--player-color': item.color }}><div className="player-line"><span className="player-avatar">{item.name.slice(0, 1).toUpperCase()}</span><strong>{item.name}</strong><span className="player-tag">{own ? 'ВЫ' : 'СОПЕРНИК'}</span>{!item.alive && <span className="eliminated-label">Поражение</span>}</div><div className="score-metrics">{own ? <span className="resource-stocks"><Icon name="gem" size={17} />{['metal', 'energy', 'silicon'].map(type => <span key={type}><b>{item.resources?.[type] ?? 0}</b><small>{type}</small></span>)}</span> : <span><small>Запасы неизвестны</small></span>}<span><Icon name="bot" size={17} /><b>{bots}</b><small>{own ? 'ботов' : 'видимых ботов'}</small></span><div className="base-status"><span>БАЗА</span><span>{base ? `${Math.round(base.hp / base.maxHp * 100)}%` : own || !item.alive ? '0%' : 'не видна'}</span><div className="base-health"><i style={{ width: `${base ? base.hp / base.maxHp * 100 : 0}%` }} /></div></div></div></div>
                 })}</section>
                 <div className="game-layout">
-                  <Editor navigate={navigate} source={source} onChange={setSource} onApply={apply} onExample={() => setSource(example)} onAI={async () => { if (await request('useAI')) setMessage('Ботами управляет встроенный AI.') }} disabled={disabled} applied={source === applied && player?.control === 'script'} appliedSource={applied} compileError={compileError} control={player?.control} debug={debug} config={state.config} />
-                  <section className="panel arena"><div className="arena-header"><div className="arena-title"><Icon name="target" size={19} /><h2>Арена</h2><span className={`live-badge ${state.gameState === 'finished' ? 'finished' : ''}`}><i className="status-dot" />{state.gameState === 'finished' ? 'ФИНИШ' : 'LIVE'}</span></div><div className="arena-tools"><span data-testid="tick">Тик {state.tick} · {state.config.tickRate} тиков/с</span><Tip text="Строки развёртки, цветовая маска и мягкое свечение ЭЛТ-монитора."><button className="crt-toggle" aria-pressed={crt} onClick={() => setCrt(!crt)}>ЭЛТ</button></Tip></div></div><div className={`battlefield ${crt ? "crt-screen" : ""}`}><Renderer state={state} /><span className="map-coordinates" aria-hidden="true">SECTOR 01 / {state.config.mapWidth} × {state.config.mapHeight}</span></div><div className="arena-footer"><div className="legend"><Tip text="Создаёт новых ботов. После уничтожения базы оставшиеся боты продолжают бой."><span><i className="legend-base" />База</span></Tip><Tip text="Выполняет программу или команды встроенного AI."><span><i className="legend-bot" />Бот</span></Tip><Tip text="Кристаллы пополняют общий запас игрока."><span><i className="legend-resource" />Ресурс</span></Tip></div><span><Icon name="users" size={14} />{countLabel(state.players.filter(item => item.alive).length, 'игрок в игре', 'игрока в игре', 'игроков в игре')}</span></div></section>
+                  {editor}
+                  <section className="panel arena"><div className="arena-header"><div className="arena-title"><Icon name="target" size={19} /><h2>Арена</h2><span className={`live-badge ${state.gameState === 'finished' ? 'finished' : ''}`}><i className="status-dot" />{state.gameState === 'finished' ? 'ФИНИШ' : 'LIVE'}</span></div><div className="arena-tools"><span data-testid="tick">Тик {state.tick} · {state.config.tickRate} тиков/с</span><Tip text="Строки развёртки, цветовая маска и мягкое свечение ЭЛТ-монитора."><button className="crt-toggle" aria-pressed={crt} onClick={() => setCrt(!crt)}>ЭЛТ</button></Tip></div></div><div className={`battlefield ${crt ? "crt-screen" : ""}`}><Renderer state={state} /><span className="map-coordinates" aria-hidden="true">SECTOR 01 / {state.config.mapWidth} × {state.config.mapHeight}</span></div><div className="arena-footer"><div className="legend"><Tip text="Производство задаётся программой Base Controller. После уничтожения базы боты продолжают выполнять свой код."><span><i className="legend-base" />База</span></Tip><Tip text="Выполняет явные команды своей программы. Без команд остаётся на месте."><span><i className="legend-bot" />Бот</span></Tip><Tip text="Metal, energy и silicon нужно добыть в груз бота и разгрузить на базе."><span><i className="legend-resource" />Ресурс</span></Tip></div><span><Icon name="users" size={14} />{countLabel(state.players.filter(item => item.alive).length, 'игрок в игре', 'игрока в игре', 'игроков в игре')}</span></div><BotInspector bots={state.bots.filter(bot => bot.ownerId === (state.viewerId || player?.id))} /></section>
                 </div>
               </>
             )}

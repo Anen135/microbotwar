@@ -1,21 +1,40 @@
+const { snapshotFor, resetVisibility } = require('./visibility')
 const defaults = require('./config')
 const Player = require('./Player')
 const Base = require('./Base')
 const Bot = require('./Bot')
 const Resource = require('./Resource')
+const MessageBus = require('./MessageBus')
 const { compile, run } = require('../scripting/Interpreter')
 const { createApi } = require('../scripting/Api')
+const { resourceTypes, cargoTotal } = require('./economy')
+const { designCost } = require('./design')
+const { cloneData } = require('../scripting/data')
 
 class Game {
   constructor(config = {}, random = Math.random) {
-    this.config = Object.freeze({ ...defaults, ...config })
-    for (const [key, value] of Object.entries(this.config)) {
-      if (!Number.isFinite(value) || value < 0) {
-        throw new RangeError(`${key} must be a finite non-negative number`)
+    if (Object.keys(config).some(key => !Object.hasOwn(defaults, key))) throw new RangeError('Unknown game configuration field')
+    const merged = { ...defaults, ...config }
+    for (const key of Object.keys(defaults)) {
+      if (typeof defaults[key] !== 'object') continue
+      if (config[key] !== undefined && (!config[key] || typeof config[key] !== 'object' || Array.isArray(config[key]))) throw new RangeError(`${key} must be a dictionary`)
+      if (config[key] && Object.keys(config[key]).some(field => !Object.hasOwn(defaults[key], field))) throw new RangeError(`Unknown ${key} field`)
+      merged[key] = Object.freeze({ ...defaults[key], ...config[key] })
+    }
+    this.config = Object.freeze(merged)
+    for (const [key, setting] of Object.entries(this.config)) {
+      for (const value of typeof setting === 'object' ? Object.values(setting) : [setting]) {
+        if (!Number.isFinite(value) || value < 0) throw new RangeError(`${key} must contain finite non-negative numbers`)
       }
     }
-    for (const key of ['tickRate', 'mapWidth', 'mapHeight', 'resourceRespawnInterval', 'botCost']) {
+    for (const key of ['tickRate', 'mapWidth', 'mapHeight', 'resourceRespawnInterval', 'cpuOperationCost']) {
       if (this.config[key] === 0) throw new RangeError(`${key} must be positive`)
+    }
+    for (const key of ['resourceCount', 'maxPlayers', 'maxBotsPerPlayer', 'designPoints', 'maxPrograms', 'scriptOperationLimit', 'baseCpuBudget', 'maxMessagesPerTick', 'maxInboxMessages', 'maxQueuedMessages', 'messageMaxBytes', 'memoryMaxBytes', 'tagsMaxBytes']) {
+      if (!Number.isSafeInteger(this.config[key])) throw new RangeError(`${key} must be a safe integer`)
+    }
+    for (const [key, max] of Object.entries({ resourceCount: 1000, maxPlayers: 16, maxBotsPerPlayer: 256, maxPrograms: 64, designPoints: 100, scriptOperationLimit: 10000, baseCpuBudget: 10000, maxMessagesPerTick: 32, maxInboxMessages: 64, maxQueuedMessages: 16384, messageMaxBytes: 4096, memoryMaxBytes: 65536, tagsMaxBytes: 8192 })) {
+      if (this.config[key] > max) throw new RangeError(`${key} exceeds its supported limit`)
     }
     this.players = []
     this.bases = []
@@ -26,6 +45,7 @@ class Game {
     this.random = random
     this.state = 'setup'
     this.winnerId = null
+    this.messageBus = new MessageBus(this)
   }
 
   addPlayer({ name, color, x, y }) {
@@ -47,25 +67,26 @@ class Game {
   tick() {
     if (this.state === 'finished') return
     if (this.state === 'running') {
+      this.messageBus.deliver()
       for (const player of this.players) {
         player.error = null
         player.cpu = 0
         player.limited = false
+        player.debug = null
       }
-      for (const bot of [...this.bots]) {
-        if (bot.hp <= 0) continue
-        const player = this.players.find(p => p.id === bot.ownerId)
-        if (player.control === 'ai') this.runAi(bot)
-        if (player.control === 'script' && bot.program) {
-          const api = createApi(this, bot, player)
-          const result = run(bot.program, api.functions, this.config.scriptOperationLimit)
-          player.cpu = Math.max(player.cpu, result.cpu)
-          player.limited ||= result.limited
-          if (result.error) {
-            player.error ??= result.error
-            bot.target = null
-          } else api.commit()
-        }
+      const entities = [...this.bases, ...this.bots]
+      for (const entity of entities) {
+        entity.target = null
+        entity.cpu = 0
+        entity.limited = false
+        entity.energy = Math.min(entity.maxEnergy, entity.energy + (this.bases.includes(entity) ? this.config.baseEnergyRegen : this.config.energyRegen))
+      }
+      for (const entity of entities) {
+        if (entity.hp <= 0) continue
+        const player = this.players.find(p => p.id === entity.ownerId)
+        const isBase = this.bases.includes(entity)
+        const program = isBase ? player.baseProgram : player.programs.get(entity.programId)?.program
+        if (program) this.executeEntity(entity, player, program, isBase)
       }
     }
     const { tickRate, mapWidth, mapHeight } = this.config
@@ -79,6 +100,10 @@ class Game {
       const dy = y - bot.y
       const distance = Math.hypot(dx, dy)
       const step = bot.speed / tickRate
+      if (this.state === 'running' && distance > 0) {
+        if (bot.energy < this.config.actionEnergyCosts.movement) { bot.target = null; continue }
+        bot.energy -= this.config.actionEnergyCosts.movement
+      }
 
       if (distance <= step) {
         bot.x = x
@@ -106,30 +131,74 @@ class Game {
     this.fillResources()
   }
 
-  applyProgram(player, source) {
-    const program = compile(source)
-    player.program = program
-    player.source = source
+  executeEntity(entity, player, program, isBase) {
+    const api = createApi(this, entity, player, isBase)
+    const budget = { used: 0, limit: entity.cpuBudget }
+    const events = []
+    if (entity.needsSpawn) { events.push({ name: 'on_spawn' }); entity.needsSpawn = false }
+    for (const message of entity.inbox) events.push({ name: 'on_message', parameter: 'message', value: message })
+    for (const damage of entity.damageEvents) {
+      if (damage.tick <= this.tickCount) events.push({ name: 'on_damage', parameter: 'attacker', value: damage.attacker })
+    }
+    entity.damageEvents = entity.damageEvents.filter(damage => damage.tick > this.tickCount)
+    events.push({ name: null })
+    let result = { cpu: 0, error: null, limited: false }
+    for (const event of events) {
+      if (event.name && !program.events?.[event.name]) continue
+      const variables = { ...api.variables }
+      if (event.parameter) variables[event.parameter] = cloneData(event.value)
+      result = run(program, api.functions, entity.cpuBudget, {
+        variables, budget, event: event.name, costs: this.config.apiCpuCosts, operationCost: this.config.cpuOperationCost,
+      })
+      if (result.error || result.limited) break
+    }
+    entity.cpu = budget.used
+    entity.limited = result.limited
+    if (!result.error) {
+      try { api.commit() } catch (error) { result.error = error.message }
+    }
+    if (result.error) { entity.target = null; player.error ??= result.error }
+    player.cpu = Math.max(player.cpu, entity.cpu)
+    player.limited ||= entity.limited
+    const debug = { programId: isBase ? '@base' : entity.programId, entityId: entity.id, error: result.error, cpu: entity.cpu, limited: entity.limited, cpuBudget: entity.cpuBudget }
+    const rank = item => item?.error ? 3 : item?.limited ? 2 : 1
+    if (!player.debug || rank(debug) > rank(player.debug) || (rank(debug) === rank(player.debug) && debug.cpu > player.debug.cpu)) player.debug = debug
+  }
+
+  applyProgram(player, source, programId = 'default', design) {
+    const entry = player.programs.apply(programId, source, design)
+    if (programId === 'default') player.source = source
     player.control = 'script'
     player.error = null
     for (const bot of this.bots.filter(bot => bot.ownerId === player.id)) {
-      bot.program = program
-      bot.target = null
+      if (bot.programId === programId) bot.target = null
     }
+    return entry
+  }
+
+  applyBaseProgram(player, source) {
+    const program = compile(source)
+    player.baseProgram = program
+    player.baseSource = source
+    player.error = null
+    return { source }
   }
 
   restart() {
     this.stop()
+    resetVisibility(this)
     this.bots = []
     this.bases = []
     this.resources = []
+    this.messageBus.clear()
     this.tickCount = 0
     this.winnerId = null
     this.players.forEach((player, index) => {
       player.alive = true
-      player.resources = this.config.startingResources
+      player.resources = { ...this.config.startingResources }
       player.error = null
       player.cpu = 0
+      player.debug = null
       const angle = index * 2 * Math.PI / this.players.length
       const position = {
         ownerId: player.id,
@@ -138,8 +207,7 @@ class Game {
         config: this.config,
       }
       this.bases.push(new Base(position))
-      const bot = new Bot(position)
-      bot.program = player.program
+      const bot = new Bot({ ...position, design: player.programs.get('default').design })
       this.bots.push(bot)
     })
     this.beginMatch()
@@ -151,6 +219,7 @@ class Game {
         x: this.random() * this.config.mapWidth,
         y: this.random() * this.config.mapHeight,
         amount: this.config.resourceAmount,
+        resourceType: resourceTypes[this.resources.length % resourceTypes.length],
       }))
     }
   }
@@ -159,47 +228,56 @@ class Game {
     return Math.hypot(a.x - b.x, a.y - b.y)
   }
 
-  nearest(bot, kind) {
-    const entities = kind === 'resource' ? this.resources : [...this.bots, ...this.bases]
-    let nearest = null
-    let range = bot.visionRange
-    for (const entity of entities) {
-      if (entity.id === bot.id || entity.hp <= 0 || entity.amount <= 0) continue
-      if (kind === 'enemy' && entity.ownerId === bot.ownerId) continue
-      if (kind === 'friendly' && entity.ownerId !== bot.ownerId) continue
-      const distance = this.distance(bot, entity)
-      if (distance <= range) {
-        range = distance
-        nearest = entity
-      }
-    }
-    return nearest
+  scan(entity) {
+    return [...this.bots, ...this.bases, ...this.resources]
+      .filter(item => item.id !== entity.id && (item.hp === undefined || item.hp > 0)
+        && (item.amount === undefined || item.amount > 0) && this.distance(entity, item) <= entity.visionRange)
+      .map(item => ({
+        id: item.id, type: this.bots.includes(item) ? 'bot' : this.bases.includes(item) ? 'base' : 'resource',
+        x: item.x, y: item.y, position: { x: item.x, y: item.y }, distance: this.distance(entity, item),
+        ...(item.ownerId ? { ownerId: item.ownerId } : {}),
+        ...(item.resourceType ? { resourceType: item.resourceType } : {}),
+      }))
   }
 
-  collect(bot) {
-    if (bot.hp <= 0 || bot.lastCollectTick === this.tickCount) return false
-    const resource = this.nearest(bot, 'resource')
-    if (!resource || this.distance(bot, resource) > this.config.collectRange) return false
-    const player = this.players.find(p => p.id === bot.ownerId)
-    const amount = Math.min(resource.amount, this.config.collectAmount)
+  mine(bot, resource) {
+    if (bot.hp <= 0 || bot.lastMineTick === this.tickCount || !this.resources.includes(resource)
+      || resource.amount <= 0 || this.distance(bot, resource) > Math.min(this.config.mineRange, bot.visionRange)) return false
+    const amount = Math.min(resource.amount, this.config.mineAmount, bot.cargoCapacity - cargoTotal(bot.cargo))
+    if (amount <= 0) return false
     resource.amount -= amount
-    player.resources += amount
-    bot.lastCollectTick = this.tickCount
+    bot.cargo[resource.resourceType] += amount
+    bot.lastMineTick = this.tickCount
     return true
   }
 
-  canSpawn(player) {
-    return player.alive && player.resources >= this.config.botCost
+  unload(bot, base) {
+    if (bot.hp <= 0 || bot.lastUnloadTick === this.tickCount || !this.bases.includes(base) || base.hp <= 0
+      || base.ownerId !== bot.ownerId || this.distance(bot, base) > this.config.unloadRange || cargoTotal(bot.cargo) === 0) return false
+    const player = this.players.find(p => p.id === bot.ownerId)
+    for (const type of resourceTypes) { player.resources[type] += bot.cargo[type]; bot.cargo[type] = 0 }
+    bot.lastUnloadTick = this.tickCount
+    return true
+  }
+
+  canSpawn(player, programId = 'default') {
+    const entry = player.programs.get(programId)
+    const cost = entry && designCost(entry.design, this.config)
+    return !!entry && player.alive
+      && resourceTypes.every(type => player.resources[type] >= cost[type])
       && this.bases.some(base => base.ownerId === player.id && base.hp > 0)
       && this.bots.filter(bot => bot.ownerId === player.id && bot.hp > 0).length < this.config.maxBotsPerPlayer
   }
 
-  spawn(player) {
-    if (!this.canSpawn(player)) return null
+  spawn(player, programId = 'default', tags = {}) {
+    const safeTags = cloneData(tags, this.config.tagsMaxBytes)
+    if (!safeTags || Array.isArray(safeTags) || typeof safeTags !== 'object') throw new Error('Tags must be a dictionary')
+    if (!this.canSpawn(player, programId)) return null
     const base = this.bases.find(base => base.ownerId === player.id && base.hp > 0)
-    const bot = new Bot({ ownerId: player.id, x: base.x, y: base.y, config: this.config })
-    bot.program = player.program
-    player.resources -= this.config.botCost
+    const entry = player.programs.get(programId)
+    const bot = new Bot({ ownerId: player.id, x: base.x, y: base.y, programId, design: entry.design, tags: safeTags, config: this.config })
+    const cost = designCost(entry.design, this.config)
+    for (const type of resourceTypes) player.resources[type] -= cost[type]
     this.bots.push(bot)
     return bot
   }
@@ -209,27 +287,14 @@ class Game {
       || ![...this.bots, ...this.bases].includes(target)
       || this.distance(bot, target) > Math.min(bot.attackRange, bot.visionRange)
       || this.tickCount < bot.nextAttackTick) return false
-    target.hp = Math.max(0, target.hp - bot.attackDamage)
+    target.hp = Math.max(0, target.hp - Math.max(this.config.minimumDamage, bot.attackDamage - (target.armor ?? 0)))
+    if (target.damageEvents.length < this.config.maxDamageEvents) {
+      const attacker = this.distance(bot, target) <= target.visionRange
+        ? { id: bot.id, type: 'bot', ownerId: bot.ownerId, x: bot.x, y: bot.y, position: { x: bot.x, y: bot.y }, distance: this.distance(bot, target) } : null
+      target.damageEvents.push({ tick: this.tickCount + 1, attacker })
+    }
     bot.nextAttackTick = this.tickCount + Math.max(1, Math.ceil(bot.attackCooldown * this.config.tickRate / 1000))
     return true
-  }
-
-  runAi(bot) {
-    const player = this.players.find(p => p.id === bot.ownerId)
-    const enemy = this.nearest(bot, 'enemy')
-    const resource = this.nearest(bot, 'resource')
-    if (enemy) {
-      if (this.distance(bot, enemy) <= bot.attackRange) {
-        bot.target = null
-        this.attack(bot, enemy)
-      } else bot.moveTo(enemy.x, enemy.y)
-    } else if (resource) {
-      bot.moveTo(resource.x, resource.y)
-      this.collect(bot)
-    } else if (!bot.target) {
-      bot.moveTo(this.random() * this.config.mapWidth, this.random() * this.config.mapHeight)
-    }
-    if (this.canSpawn(player)) this.spawn(player)
   }
 
   eliminate(playerId) {
@@ -253,6 +318,10 @@ class Game {
     }
   }
 
+  snapshotFor(playerId) {
+    return snapshotFor(this, playerId)
+  }
+
   snapshot() {
     return {
       tick: this.tickCount,
@@ -260,9 +329,9 @@ class Game {
       winnerId: this.winnerId,
       config: this.config,
       players: this.players.map(({ id, name, color, resources, alive, control }) => ({ id, name, color, resources, alive, control })),
-      bots: this.bots.map(({ id, ownerId, x, y, hp, maxHp }) => ({ id, ownerId, x, y, hp, maxHp })),
-      bases: this.bases.map(({ id, ownerId, x, y, hp, maxHp }) => ({ id, ownerId, x, y, hp, maxHp })),
-      resources: this.resources.map(({ id, x, y, amount }) => ({ id, x, y, amount })),
+      bots: this.bots.map(({ id, ownerId, x, y, hp, maxHp, programId, cargo, cargoCapacity, memory, tags, visionRange, communicationRange, cpu, cpuBudget, limited, energy, maxEnergy, design }) => ({ id, ownerId, x, y, hp, maxHp, programId, cargo: { ...cargo }, cargoCapacity, memory: cloneData(memory, this.config.memoryMaxBytes), tags: cloneData(tags, this.config.tagsMaxBytes), visionRange, communicationRange, cpu, cpuBudget, limited, energy, maxEnergy, design })),
+      bases: this.bases.map(({ id, ownerId, x, y, hp, maxHp, visionRange, communicationRange, cpu, cpuBudget, limited, energy, maxEnergy, memory }) => ({ id, ownerId, x, y, hp, maxHp, visionRange, communicationRange, cpu, cpuBudget, limited, energy, maxEnergy, memory: cloneData(memory, this.config.memoryMaxBytes) })),
+      resources: this.resources.map(({ id, x, y, amount, resourceType }) => ({ id, x, y, amount, resourceType })),
     }
   }
 

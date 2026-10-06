@@ -15,19 +15,25 @@ function match(config = {}, seed = 1) {
   return game
 }
 
-test('collection respects distance, per-tick rate, balance and depletion', () => {
+test('mining respects distance, per-tick rate, cargo and depletion; only unload credits stocks', () => {
   const game = match({ resourceCount: 0 })
   const bot = game.bots[0]
   const resource = new Resource({ x: 126, y: 100, amount: 3 })
   game.resources.push(resource)
-  assert.equal(game.collect(bot), false)
+  const starting = { ...game.players[0].resources }
+  assert.equal(game.mine(bot, resource), false)
   resource.x = 125
-  assert.equal(game.collect(bot), true)
-  assert.equal(game.collect(bot), false)
-  assert.equal(game.players[0].resources, 2)
+  assert.equal(game.mine(bot, resource), true)
+  assert.equal(game.mine(bot, resource), false)
+  assert.equal(bot.cargo.metal, 2)
+  assert.deepEqual(game.players[0].resources, starting)
   game.tick()
-  game.collect(bot)
-  assert.equal(game.players[0].resources, 3)
+  game.mine(bot, resource)
+  assert.equal(bot.cargo.metal, 3)
+  assert.equal(game.unload(bot, game.bases[1]), false)
+  assert.equal(game.unload(bot, game.bases[0]), true)
+  assert.equal(game.players[0].resources.metal, starting.metal + 3)
+  assert.equal(bot.cargo.metal, 0)
   game.tick()
   assert.equal(game.resources.length, 0)
 })
@@ -35,15 +41,16 @@ test('collection respects distance, per-tick rate, balance and depletion', () =>
 test('spawn charges once, respects the cap and needs a living base', () => {
   const game = match({ maxBotsPerPlayer: 2 })
   const player = game.players[0]
+  player.resources = { metal: 0, energy: 0, silicon: 0 }
   assert.equal(game.spawn(player), null)
-  player.resources = 60
+  player.resources = { metal: 20, energy: 10, silicon: 0 }
   assert.equal(game.spawn(player).ownerId, player.id)
-  assert.equal(player.resources, 30)
+  assert.deepEqual(player.resources, { metal: 10, energy: 5, silicon: 0 })
   assert.equal(game.spawn(player), null)
   game.bots.pop()
   game.bases[0].hp = 0
   assert.equal(game.spawn(player), null)
-  assert.equal(player.resources, 30)
+  assert.deepEqual(player.resources, { metal: 10, energy: 5, silicon: 0 })
 })
 
 test('resources respawn within map bounds at the configured interval', () => {
@@ -59,7 +66,7 @@ test('resources respawn within map bounds at the configured interval', () => {
 test('combat enforces vision, attack range, ownership and cooldown', () => {
   const game = match({ resourceCount: 0 })
   const [a, b] = game.bots
-  assert.equal(game.nearest(a, 'enemy'), null)
+  assert.equal(game.scan(a).some(item => item.id === b.id), false)
   b.x = 136
   assert.equal(game.attack(a, b), false)
   b.x = 135
@@ -71,9 +78,9 @@ test('combat enforces vision, attack range, ownership and cooldown', () => {
   assert.equal(b.hp, 80)
   assert.equal(game.attack(a, game.bases[0]), false)
   b.x = 351
-  assert.equal(game.nearest(a, 'enemy'), null)
+  assert.equal(game.scan(a).some(item => item.id === b.id), false)
   b.x = 350
-  assert.equal(game.nearest(a, 'enemy'), b)
+  assert.equal(game.scan(a).some(item => item.id === b.id), true)
 })
 
 test('defeat needs both base and bots destroyed; winner stops simulation', () => {
@@ -91,47 +98,51 @@ test('defeat needs both base and bots destroyed; winner stops simulation', () =>
   assert.equal(game.tickCount, tick)
 })
 
-test('two built-in AIs finish matches across deterministic seeds', () => {
-  for (const seed of [1, 2, 3]) {
-    const game = match({}, seed)
-    game.players.forEach(player => { player.control = 'ai' })
-    for (let i = 0; i < 20000 && game.state === 'running'; i += 1) game.tick()
-    assert.equal(game.state, 'finished', `seed ${seed}`)
-    assert.ok(game.winnerId)
-    assert.ok(game.bots.length > 0)
-  }
+test('empty programs never move, mine, attack or spawn, even beside targets', () => {
+  const game = match({ resourceCount: 0 })
+  const [a, b] = game.bots
+  b.x = a.x + 10
+  game.resources.push(new Resource({ x: a.x, y: a.y, amount: 20 }))
+  game.players.forEach(player => {
+    player.resources = { metal: 300, energy: 300, silicon: 300 }
+    game.applyProgram(player, '')
+  })
+  const before = game.snapshot()
+  for (let i = 0; i < 20; i += 1) game.tick()
+  const after = game.snapshot()
+  for (const key of ['bots', 'bases', 'resources', 'players']) assert.deepEqual(after[key], before[key])
 })
 
-test('the example DSL drives collection, spawning and combat to a winner', () => {
+test('the empty example cannot play the match automatically', () => {
   const game = match({}, 7)
   const example = require('../scripting/example')
   game.players.forEach(player => game.applyProgram(player, example))
   let spawned = false
-  for (let i = 0; i < 20000 && game.state === 'running'; i += 1) {
+  for (let i = 0; i < 20; i += 1) {
     game.tick()
     spawned ||= game.bots.length > 2
     assert.ok(game.players.every(player => !player.error && !player.limited))
   }
-  assert.equal(spawned, true)
-  assert.equal(game.state, 'finished')
-  assert.ok(game.winnerId)
+  assert.equal(spawned, false)
+  assert.equal(game.state, 'running')
+  assert.equal(game.winnerId, null)
 })
 
 test('restart preserves players and programs, recreates entities and balances', () => {
   const game = match()
   const player = game.players[0]
-  player.source = 'collect()'
-  player.program = { example: true }
-  player.resources = 100
+  game.applyProgram(player, 'pass')
+  player.resources = { metal: 100, energy: 100, silicon: 100 }
   const oldBot = game.bots[0].id
   game.eliminate(game.players[1].id)
   game.restart()
   assert.equal(game.state, 'running')
   assert.equal(game.tickCount, 0)
   assert.equal(game.winnerId, null)
-  assert.equal(player.resources, 0)
-  assert.equal(player.source, 'collect()')
-  assert.equal(game.bots[0].program, player.program)
+  assert.deepEqual(player.resources, game.config.startingResources)
+  assert.equal(player.source, 'pass')
+  assert.equal(game.bots[0].programId, 'default')
+  assert.equal(player.programs.get('default').source, 'pass')
   assert.notEqual(game.bots[0].id, oldBot)
   assert.equal(game.bases.length, 2)
 })

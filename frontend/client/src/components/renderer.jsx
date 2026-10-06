@@ -4,6 +4,7 @@ export default function Renderer({ state }) {
   const ref = useRef(null)
   const history = useRef(new Map())
   const previousTick = useRef(null)
+  const fog = useRef(null)
 
   useEffect(() => {
     const canvas = ref.current
@@ -28,6 +29,19 @@ export default function Renderer({ state }) {
     if (canvas.height !== mapHeight) canvas.height = mapHeight
     const players = new Map(state.players.map(player => [player.id, player]))
     const baseIds = new Set(state.bases.map(base => base.id))
+    const visibleIds = new Set([...entities, ...state.resources].map(entity => entity.id))
+    if (!fog.current) fog.current = document.createElement('canvas')
+    const fogCanvas = fog.current
+    fogCanvas.width = mapWidth
+    fogCanvas.height = mapHeight
+    const fogContext = fogCanvas.getContext('2d')
+    fogContext.fillStyle = '#08090bea'
+    fogContext.fillRect(0, 0, mapWidth, mapHeight)
+    fogContext.globalCompositeOperation = 'destination-out'
+    for (const sensor of state.vision || []) {
+      fogContext.beginPath(); fogContext.arc(sensor.x, sensor.y, sensor.radius, 0, Math.PI * 2); fogContext.fill()
+    }
+    fogContext.globalCompositeOperation = 'source-over'
     let frame
 
     function draw() {
@@ -43,8 +57,22 @@ export default function Renderer({ state }) {
       for (let y = 0; y < mapHeight; y += 80) {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(mapWidth, y); ctx.stroke()
       }
+      ctx.drawImage(fogCanvas, 0, 0)
+      for (const entity of state.lastSeen || []) {
+        if (visibleIds.has(entity.id)) continue
+        const age = Math.max(0, Math.floor((state.tick - entity.lastSeenTick) / state.config.tickRate))
+        ctx.globalAlpha = 0.35
+        ctx.strokeStyle = players.get(entity.ownerId)?.color || '#b5b8bf'
+        const size = entity.type === 'base' ? 22 : entity.type === 'resource' ? 7 : 8
+        ctx.strokeRect(entity.x - size, entity.y - size, size * 2, size * 2)
+        ctx.textAlign = 'center'
+        ctx.font = '10px system-ui'
+        ctx.fillStyle = '#b5b8bf'
+        ctx.fillText(`Видели ${age} с назад`, entity.x, entity.y + size + 13)
+        ctx.globalAlpha = 1
+      }
       for (const resource of state.resources) {
-        ctx.fillStyle = '#d8b974'
+        ctx.fillStyle = { metal: '#d8b974', energy: '#78c9a4', silicon: '#a59be4' }[resource.resourceType] || '#d8b974'
         ctx.beginPath()
         ctx.moveTo(resource.x, resource.y - 7)
         ctx.lineTo(resource.x + 6, resource.y)
@@ -110,5 +138,5 @@ export default function Renderer({ state }) {
     draw()
     return () => cancelAnimationFrame(frame)
   }, [state])
-  return <canvas ref={ref} aria-label="Игровая карта: базы, боты и ресурсы" />
+  return <canvas ref={ref} aria-label="Игровая карта: видимые базы, боты, ресурсы и устаревшие отметки разведки" />
 }

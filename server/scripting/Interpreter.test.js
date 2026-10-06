@@ -23,7 +23,7 @@ else:
 
 test('and/or short circuit protects missing targets; variables reset every execution', () => {
   let called = false
-  const result = run(compile('if false and distance(null) > 0:\n    collect()\nx = true or missing'), {
+  const result = run(compile('if false and distance(null) > 0:\n    mine(null)\nx = true or missing'), {
     distance: () => { called = true },
   })
   assert.equal(result.error, null)
@@ -33,11 +33,11 @@ test('and/or short circuit protects missing targets; variables reset every execu
 
 test('malformed code, arbitrary JS and host access are rejected', () => {
   for (const source of [
-    'eval(1)', 'require(1)', 'process.exit()', 'x = globalThis.process', 'x = [1]',
-    'while true:\n    collect()', 'if true:\ncollect()', 'else:\n    collect()',
-    'collect(1)', 'moveTo()', 'if true:\n\tcollect()', 'x = (1', 'x = 1 @ 2',
+    'eval(1)', 'require(1)', 'process.exit()',
+    'while true:\n    mine(null)', 'if true:\nmine(null)', 'else:\n    mine(null)',
+    'mine()', 'moveTo()', 'if true:\n\tmine(null)', 'x = (1', 'x = 1 @ 2',
     'x = ' + '('.repeat(40) + '1' + ')'.repeat(40), 'x'.repeat(8001),
-    Array(202).fill('collect()').join('\n'), 'constructor()',
+    Array(202).fill('getHealth()').join('\n'), 'constructor()',
   ]) assert.throws(() => compile(source), undefined, source.slice(0, 60))
   assert.match(run(compile('x = process'), {}).error, /Unknown variable/)
   assert.match(run(compile('x = 1 / 0'), {}).error, /finite number/)
@@ -52,8 +52,8 @@ test('errors identify source lines and suggest known function names', () => {
 
 test('operation budget stops calls and starts fresh on the next run', () => {
   let calls = 0
-  const program = compile(Array(100).fill('collect()').join('\n'))
-  const functions = { collect: () => { calls += 1 } }
+  const program = compile(Array(100).fill('getHealth()').join('\n'))
+  const functions = { getHealth: () => { calls += 1 } }
   const result = run(program, functions, 10)
   assert.equal(result.limited, true)
   assert.ok(result.cpu <= 10)
@@ -70,17 +70,24 @@ function gameWithPlayers() {
   return game
 }
 
-test('apply updates all bots and future spawns; invalid edits preserve the working program', () => {
+test('program registry selects independent bot programs and rejects invalid edits atomically', () => {
   const game = gameWithPlayers()
   const player = game.players[0]
   game.applyProgram(player, 'moveTo(200, 100)')
-  const program = player.program
+  const program = player.programs.get('default')
   assert.throws(() => game.applyProgram(player, 'eval(1)'))
-  assert.equal(player.program, program)
+  assert.equal(player.programs.get('default'), program)
   game.tick()
   assert.equal(game.bots[0].x, 108)
-  player.resources = 30
-  assert.equal(game.spawn(player).program, program)
+  player.resources = { metal: 10, energy: 5, silicon: 0 }
+  game.applyProgram(player, 'moveTo(100, 200)', 'miner')
+  const miner = game.spawn(player, 'miner')
+  assert.equal(miner.programId, 'miner')
+  game.tick()
+  assert.equal(miner.y, 108)
+  assert.equal(game.bots[0].y, 100)
+  assert.equal(game.spawn(player, 'missing'), null)
+  assert.throws(() => game.applyProgram(player, '', '__proto__'))
 })
 
 test('a runtime error cancels actions for that bot without stopping other players', () => {
@@ -105,7 +112,7 @@ test('default program compiles, runs within budget, and snapshots exclude source
   game.tick()
   assert.equal(game.players[0].error, null)
   assert.equal(game.players[0].limited, false)
-  assert.ok(game.players[0].cpu > 0)
+  assert.equal(game.players[0].cpu, 0)
   const snapshot = game.snapshot()
   assert.equal(snapshot.players[0].program, undefined)
   assert.equal(snapshot.players[0].source, undefined)

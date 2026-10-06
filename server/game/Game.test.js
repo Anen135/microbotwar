@@ -19,7 +19,7 @@ test('players receive a base and bot with distinct IDs and the correct owner', (
   assert.equal(bot.ownerId, player.id)
   assert.equal(game.bots[1].ownerId, second.id)
   assert.equal(new Set([...game.players, ...game.bases, ...game.bots].map(e => e.id)).size, 6)
-  assert.equal(player.resources, 0)
+  assert.deepEqual(player.resources, { metal: 30, energy: 20, silicon: 10 })
   assert.equal(player.alive, true)
   assert.equal(bot.hp, 100)
   assert.equal(game.bases[0].hp, 1000)
