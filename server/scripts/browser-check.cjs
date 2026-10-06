@@ -38,14 +38,23 @@ async function main() {
       await page.goto(url)
       await page.getByText('Сервер подключён', { exact: true }).waitFor()
     }
+    await host.screenshot({ path: path.join(artifacts, 'redesign-welcome.png'), fullPage: true })
+    await host.setViewportSize({ width: 1024, height: 900 })
+    assert.equal(await host.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+    await host.screenshot({ path: path.join(artifacts, 'redesign-welcome-1024.png'), fullPage: true })
+    await host.setViewportSize({ width: 1440, height: 1000 })
     await host.getByLabel('Имя', { exact: true }).fill('Alpha')
     await host.getByRole('button', { name: 'Создать комнату', exact: true }).click()
     await host.getByTestId('room-code').waitFor()
     const code = await host.getByTestId('room-code').innerText()
+    await host.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await host.getByRole('button', { name: 'Скопировать код комнаты', exact: true }).click()
+    assert.equal(await host.evaluate(() => navigator.clipboard.readText()), code)
     await guest.getByLabel('Имя', { exact: true }).fill('Beta')
     await guest.getByLabel('Код комнаты', { exact: true }).fill(code)
     await guest.getByRole('button', { name: 'Войти', exact: true }).click()
     await guest.getByTestId('room-code').waitFor()
+    await host.screenshot({ path: path.join(artifacts, 'redesign-lobby.png'), fullPage: true })
     assert.equal(await host.getByRole('button', { name: 'Начать матч', exact: true }).isDisabled(), true)
     await host.getByRole('button', { name: 'Готов', exact: true }).click()
     await guest.getByRole('button', { name: 'Готов', exact: true }).click()
@@ -55,6 +64,7 @@ async function main() {
     const room = server.rooms.get(code)
     const game = room.game
     await host.waitForFunction(() => Number(document.querySelector('[data-testid="tick"]').textContent.match(/\d+/)[0]) >= 3)
+    await host.screenshot({ path: path.join(artifacts, 'redesign-arena.png'), fullPage: true })
     const source = host.getByLabel('Код программы', { exact: true })
     await source.fill('attak(null)')
     await host.getByRole('button', { name: 'Применить', exact: true }).click()
@@ -84,6 +94,11 @@ async function main() {
     assert.ok((await host.locator('#code-help').innerText()).includes(`Новый бот: ${game.config.botCost} ресурсов`))
     for (const width of [1024, 1280, 1440]) {
       await host.setViewportSize({ width, height: 1000 })
+      await host.waitForFunction(() => {
+        const input = document.querySelector('#bot-source')
+        const highlight = document.querySelector('.code-highlight')
+        return highlight.clientWidth === input.clientWidth && highlight.scrollLeft === input.scrollLeft
+      })
       const layout = await host.evaluate(() => {
         const editor = document.querySelector('.editor').getBoundingClientRect()
         const arena = document.querySelector('.arena').getBoundingClientRect()
