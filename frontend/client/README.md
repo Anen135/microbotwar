@@ -1,16 +1,16 @@
-# React + Vite
+# Клиент Microbots Arena
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React/Vite-клиент с Canvas-ареной, лобби, редактором и отдельными страницами справки.
 
-Currently, two official plugins are available:
+Из корня репозитория:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+npm --prefix frontend/client ci
+npm --prefix frontend/client run dev
+npm --prefix frontend/client run lint
+npm --prefix frontend/client run build
+```
 
-## React Compiler
+В режиме разработки нужен также сервер: `npm --prefix server run dev`. Vite проксирует Socket.IO и HTTP API на `127.0.0.1:3001`. Для игры используйте сервер или Vite с proxy; `npm run preview` предназначен для предпросмотра сборки.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+[Запуск](../../docs/getting-started.md) · [Архитектура](../../docs/architecture.md) · [Проверки](../../docs/testing.md).
