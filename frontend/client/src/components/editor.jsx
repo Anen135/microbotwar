@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef } from 'react'
 import { countLabel } from '../format'
 import Icon from './Icon'
+import Tip from './Tip'
+import PageLink from './PageLink'
 
 function highlightedCode(source) {
   return source.split(/(#[^\n]*|\b(?:if|else|and|or|not|true|false|null)\b|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*(?=\())/g).map((part, index) => {
@@ -9,7 +11,7 @@ function highlightedCode(source) {
   })
 }
 
-export default function Editor({ source, onChange, onApply, onExample, onAI, disabled, applied, appliedSource, compileError, control, debug, config }) {
+export default function Editor({ navigate, source, onChange, onApply, onExample, onAI, disabled, applied, appliedSource, compileError, control, debug, config }) {
   const textarea = useRef(null)
   const highlight = useRef(null)
   const gutter = useRef(null)
@@ -56,10 +58,10 @@ export default function Editor({ source, onChange, onApply, onExample, onAI, dis
       <div className="arena-header"><div className="arena-title"><Icon name="code" size={19} /><h2>Программа ботов</h2></div><span className="editor-mode">{control === 'script' ? 'ВАШ КОД' : 'AI'}</span></div>
       <div className="file-tab"><span><Icon name="code" size={14} />strategy.bot <i className={applied ? 'saved-dot' : 'draft-dot'} /></span><small>BOT SCRIPT</small></div>
       <label className="sr-only" htmlFor="bot-source">Код программы</label>
-      <div className="code-workspace"><div className="line-gutter" aria-hidden="true"><div ref={gutter}>{lines.map((_, index) => <span key={index} className={sameSource && line === index + 1 ? 'line-error' : ''}>{index + 1}</span>)}</div></div><div className="code-layers"><pre ref={highlight} className="code-highlight" aria-hidden="true">{highlightedCode(source)}{'\n'}</pre><textarea ref={textarea} id="bot-source" value={source} onChange={event => onChange(event.target.value)} onScroll={syncScroll} wrap="off" spellCheck={false} autoCapitalize="off" autoCorrect="off" maxLength={8000} aria-describedby={error ? 'code-help code-error' : 'code-help'} aria-invalid={Boolean(error && sameSource)} /></div></div>
-      <div className="editor-meta"><span>{applied ? <><i className="status-dot" />Применено</> : 'Изменения применяются кнопкой'}</span><span>{countLabel(lines.length, 'строка', 'строки', 'строк')}</span></div>
-      <div className="editor-controls"><button className="apply-button" onClick={onApply} disabled={disabled || !source.trim()}><Icon name="play" size={16} />Применить<Icon className="apply-arrow" name="arrow" size={17} /></button><div className="actions"><button className="secondary" onClick={onExample} disabled={disabled}><Icon name="code" size={15} />Пример</button><button className="secondary" onClick={onAI} disabled={disabled || control === 'ai'}><Icon name="bot" size={15} />Включить AI</button></div></div>
-      <div className="cpu-status"><div><span><Icon name="bolt" size={13} />Бюджет операций</span><strong>{debug.cpu}<span> / {config.scriptOperationLimit}</span></strong></div><progress value={debug.cpu} max={config.scriptOperationLimit} aria-label="Бюджет операций" /><p>Максимум среди ваших ботов за тик</p></div>
+      <div className="code-workspace"><div className="line-gutter" aria-hidden="true"><div ref={gutter}>{lines.map((_, index) => <span key={index} className={sameSource && line === index + 1 ? 'line-error' : ''}>{index + 1}</span>)}</div></div><div className="code-layers"><pre ref={highlight} className="code-highlight" aria-hidden="true">{highlightedCode(source)}{'\n'}</pre><textarea ref={textarea} id="bot-source" value={source} onChange={event => onChange(event.target.value)} onScroll={syncScroll} wrap="off" spellCheck={false} autoCapitalize="off" autoCorrect="off" maxLength={8000} aria-describedby={error ? 'code-error' : undefined} aria-invalid={Boolean(error && sameSource)} /></div></div>
+      <div className="editor-meta"><span>{applied ? <><i className="status-dot" />Применено</> : 'Черновик'}</span><span>{countLabel(lines.length, 'строка', 'строки', 'строк')}</span></div>
+      <div className="editor-controls"><Tip text="Применить код ко всем текущим и будущим ботам."><button className="apply-button" onClick={onApply} disabled={disabled || !source.trim()}><Icon name="play" size={16} />Применить<Icon className="apply-arrow" name="arrow" size={17} /></button></Tip><div className="actions"><Tip text="Заменить текст в редакторе примером. Затем нажми «Применить»."><button className="secondary" onClick={onExample} disabled={disabled}><Icon name="code" size={15} />Пример</button></Tip><Tip text="Передать управление встроенному AI. Черновик останется в редакторе."><button className="secondary" onClick={onAI} disabled={disabled || control === 'ai'}><Icon name="bot" size={15} />Включить AI</button></Tip></div></div>
+      <div className="cpu-status"><div><Tip text="Максимальный расход операций среди твоих ботов за текущий тик."><span><Icon name="bolt" size={13} />Бюджет операций</span></Tip><strong>{debug.cpu}<span> / {config.scriptOperationLimit}</span></strong></div><progress value={debug.cpu} max={config.scriptOperationLimit} aria-label="Бюджет операций" /></div>
       {error && <div id="code-error" className="notice error" role="alert">
         {line && <strong className="error-line">Строка {line}</strong>}
         <p>{match ? match[2] : error}</p>
@@ -67,7 +69,7 @@ export default function Editor({ source, onChange, onApply, onExample, onAI, dis
         {canLocate && <button className="secondary" type="button" onClick={goToLine}>Перейти к строке</button>}
       </div>}
       {control === 'script' && debug.limited && <p className="notice">Бюджет операций исчерпан. Выполнение продолжится с начала программы на следующем тике.</p>}
-      <details id="code-help"><summary>Как программировать ботов</summary><p>Это небольшой язык с переменными, отступами, if/else и выражениями. Программа запускается заново каждый тик; переменные не сохраняются. Циклов и доступа к JavaScript нет.</p><p><code>nearestEnemy()</code>, <code>nearestResource()</code>, <code>nearestFriendly()</code> возвращают видимую цель или null. Проверяйте её через <code>if target:</code>.</p><p><code>moveTo(target)</code> или <code>moveTo(x, y)</code>, <code>attack(target)</code>, <code>collect()</code>, <code>canSpawn()</code>, <code>spawn()</code>, <code>distance(target)</code>, <code>random()</code>.</p><p>Доступны <code>getHealth()</code>, <code>getResources()</code>, <code>getPosition()</code>, <code>getBase()</code>. Карта: {config.mapWidth} × {config.mapHeight}. Скорость: {config.botSpeed}/с. Атака: {config.botAttackRange}. Сбор: {config.collectRange}. Обзор: {config.visionRange}. Новый бот: {countLabel(config.botCost, 'ресурс', 'ресурса', 'ресурсов')}. Лимит: {countLabel(config.maxBotsPerPlayer, 'бот', 'бота', 'ботов')} на игрока.</p></details>
+      <div className="editor-reference"><PageLink href="/reference" navigate={navigate}><Icon name="book" size={14} />Справочник<Icon name="arrow" size={14} /></PageLink><span>BOT API / 14</span></div>
     </section>
   )
 }

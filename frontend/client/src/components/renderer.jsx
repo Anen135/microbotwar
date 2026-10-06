@@ -33,9 +33,9 @@ export default function Renderer({ state }) {
     function draw() {
       const time = performance.now()
       let flashing = false
-      ctx.fillStyle = '#12190f'
+      ctx.fillStyle = '#151618'
       ctx.fillRect(0, 0, mapWidth, mapHeight)
-      ctx.strokeStyle = '#26321f'
+      ctx.strokeStyle = '#2b2c2e'
       ctx.lineWidth = 1
       for (let x = 0; x < mapWidth; x += 80) {
         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, mapHeight); ctx.stroke()
@@ -76,14 +76,14 @@ export default function Renderer({ state }) {
             else ctx.lineTo(x, y)
           }
           ctx.closePath(); ctx.fill()
-          ctx.fillStyle = '#162012'
+          ctx.fillStyle = '#1a1b1d'
           ctx.fillRect(entity.x - 7, entity.y - 7, 14, 14)
           ctx.fillStyle = color
           ctx.fillRect(entity.x - 3, entity.y - 3, 6, 6)
         } else {
           ctx.fillStyle = color
           ctx.beginPath(); ctx.roundRect(entity.x - radius, entity.y - radius, radius * 2, radius * 2, 3); ctx.fill()
-          ctx.fillStyle = '#162012'
+          ctx.fillStyle = '#1a1b1d'
           ctx.fillRect(entity.x - 5, entity.y - 3, 10, 4)
         }
         if (nextHistory.get(entity.id).flashUntil > time) {
@@ -93,14 +93,14 @@ export default function Renderer({ state }) {
           flashing = true
         }
         const barWidth = base ? 56 : 20
-        ctx.fillStyle = '#35432b'
+        ctx.fillStyle = '#3a3b3d'
         ctx.fillRect(entity.x - barWidth / 2, entity.y - radius - 10, barWidth, 4)
-        ctx.fillStyle = '#c4daa7'
+        ctx.fillStyle = '#c9cacc'
         ctx.fillRect(entity.x - barWidth / 2, entity.y - radius - 10, barWidth * entity.hp / entity.maxHp, 4)
         if (base) {
           ctx.textAlign = 'center'
           ctx.font = '17px system-ui'
-          ctx.fillStyle = '#d1dec1'
+          ctx.fillStyle = '#d4d5d7'
           ctx.fillText(`${player?.name ?? ''} · ${entity.hp} HP`, entity.x, entity.y + 69)
         }
       }

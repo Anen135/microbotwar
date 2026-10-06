@@ -4,8 +4,8 @@ const { once } = require('node:events')
 const { io } = require('socket.io-client')
 const { createServer } = require('../app')
 
-async function fixture(t) {
-  const server = createServer()
+async function fixture(t, options) {
+  const server = createServer(options)
   server.httpServer.listen(0, '127.0.0.1')
   await once(server.httpServer, 'listening')
   const url = `http://127.0.0.1:${server.httpServer.address().port}`
@@ -30,8 +30,12 @@ function request(socket, event, data = {}) {
 }
 
 test('room lifecycle: authorization, readiness, sync, code application and restart', { timeout: 10000 }, async t => {
-  const { server, url, connect } = await fixture(t)
+  const { server, url, connect } = await fixture(t, { gameConfig: { botCost: 17 } })
   assert.deepEqual(await (await fetch(`${url}/health`)).json(), { ok: true })
+  const configResponse = await fetch(`${url}/api/config`)
+  assert.equal(configResponse.status, 200)
+  const publicConfig = await configResponse.json()
+  assert.equal(publicConfig.botCost, 17)
   const host = await connect()
   const guest = await connect()
   const outsider = await connect()
@@ -52,6 +56,7 @@ test('room lifecycle: authorization, readiness, sync, code application and resta
   const [first] = await hostState
   const [second] = await guestState
   assert.deepEqual(first, second)
+  assert.deepEqual(first.config, publicConfig)
   assert.equal(first.gameState, 'running')
   assert.equal(first.players.length, 2)
   assert.equal(first.bots.length, 2)
