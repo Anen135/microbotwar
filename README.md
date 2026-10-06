@@ -1,10 +1,10 @@
 # Microbots Arena
 
-Браузерная многопользовательская игра для обучения программированию: собирайте ресурсы, создавайте микроботов и управляйте армией через небольшой язык программирования. Реализован полный цикл MVP: комнаты, лобби, серверная симуляция, редактор, бой, победа и перезапуск.
+A browser-based multiplayer game for learning programming: gather resources, create microbots, and control an army using a simple programming language. The full MVP cycle is implemented: rooms, lobby, server simulation, editor, combat, victory, and restart.
 
-## Быстрый запуск
+## Quick Start
 
-Проверенное окружение — Node.js 24, npm и настольный браузер. Из корня проекта:
+Tested environment: Node.js 24, npm, and a desktop browser. From the project root:
 
 ```powershell
 npm --prefix server ci
@@ -13,16 +13,16 @@ npm --prefix frontend/client run build
 npm --prefix server start
 ```
 
-Откройте **http://127.0.0.1:3001**. Для проверки игры используйте две вкладки с разными именами. Состояние хранится в памяти сервера.
+Open **http://127.0.0.1:3001**. To test the game, use two tabs with different names. The state is stored in the server's memory.
 
-## Документация
+## Documentation
 
-Полный каталог: [docs/README.md](docs/README.md).
+Full documentation index: [docs/README.md](docs/README.md).
 
-- [Запуск и конфигурация](docs/getting-started.md).
-- [Обзор проекта](docs/overview.md) и [руководство игрока](docs/game-guide.md).
-- [Язык ботов](docs/bot-language.md), [архитектура](docs/architecture.md) и [сетевой протокол](docs/network-protocol.md).
-- [Проверки](docs/testing.md) и [подготовка релиза](docs/release.md).
-- [Документы для ИИ-агентов](docs/agents/README.md).
+- [Getting Started and Configuration](docs/getting-started.md).
+- [Project Overview](docs/overview.md) and [Player Guide](docs/game-guide.md).
+- [Bot Language](docs/bot-language.md), [Architecture](docs/architecture.md), and [Network Protocol](docs/network-protocol.md).
+- [Testing](docs/testing.md) and [Release Preparation](docs/release.md).
+- [Documents for AI Agents](docs/agents/README.md).
 
-Корневой `AGENTS.md` сохранён по исходному требованию пользователя. Он описывает ранний scaffold; актуальные команды и соглашения находятся в [docs/agents/contributor-guide.md](docs/agents/contributor-guide.md).
+The root `AGENTS.md` is preserved per the user's original request. It describes the early scaffold; current commands and conventions are located in [docs/agents/contributor-guide.md](docs/agents/contributor-guide.md).
